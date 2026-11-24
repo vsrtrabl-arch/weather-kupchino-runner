@@ -1,0 +1,68 @@
+name: Validate Private Source Tests (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Ветка, тег или commit закрытого репозитория (по умолчанию main)"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-source-validation
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Fun Day tests from private source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: ${{ inputs.source_ref || 'main' }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Compile Fun Day modules
+        working-directory: source
+        run: |
+          python -m py_compile \
+            fun_day_calendar.py \
+            fun_day_official_calendar.py \
+            fun_day_preparer.py \
+            fun_day_publisher.py
+
+      - name: Run Fun Day unit tests
+        working-directory: source
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_fun_day_*.py" -v 2>&1 | tee ../fun-day-test-results.log
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fun-day-test-results-${{ github.run_id }}
+          path: fun-day-test-results.log
+          if-no-files-found: warn
+          retention-days: 14
