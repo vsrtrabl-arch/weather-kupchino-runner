@@ -1,0 +1,120 @@
+name: Publish Workplace Dialogue (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: "Разрешить отправку одного рабочего диалога в Telegram"
+        required: true
+        default: false
+        type: boolean
+      target_date:
+        description: "Дата выпуска YYYY-MM-DD (пусто — текущая дата Москвы)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-channel-publication
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate workplace dialogue (no Telegram send)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Validate bank and preview selected dialogue
+        working-directory: source
+        env:
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          python -m py_compile workplace_publisher.py delivery_ledger.py
+          python workplace_publisher.py --validate-all
+          if [ -n "$TARGET_DATE" ]; then
+            python workplace_publisher.py --dry-run --date "$TARGET_DATE"
+          else
+            python workplace_publisher.py --dry-run
+          fi
+
+      - name: Check delivery ledger readiness
+        working-directory: source
+        env:
+          QUIZ_WORKER_URL: ${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: ${{ secrets.QUIZ_SYNC_SECRET }}
+          WORKPLACE_CHAT_ID: "@WeatherKupchino"
+        run: |
+          python - <<'PY'
+          import os
+          from delivery_ledger import DeliveryLedger
+          DeliveryLedger().preflight(os.environ["WORKPLACE_CHAT_ID"])
+          print("Preflight passed: D1 delivery ledger is ready.")
+          PY
+
+  publish:
+    name: Publish one confirmed workplace dialogue
+    needs: preflight
+    if: ${{ inputs.confirm_publish == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Publish one workplace dialogue
+        working-directory: source
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          QUIZ_WORKER_URL: ${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: ${{ secrets.QUIZ_SYNC_SECRET }}
+          WORKPLACE_CHAT_ID: "@WeatherKupchino"
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import date
+          from workplace_publisher import publish_daily_dialogue
+          target = os.environ.get("TARGET_DATE", "").strip()
+          result = publish_daily_dialogue(date.fromisoformat(target) if target else None)
+          print(result)
+          PY
