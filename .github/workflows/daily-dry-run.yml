@@ -65,5 +65,28 @@ jobs:
           print(f"Using latest date with both reservations: {test_date}")
 
           from daily_digest import run_dry_run
-          run_dry_run(test_date)
+          result = run_dry_run(test_date)
+
+          messages = result["messages"]
+          assert len(messages) == 3, f"Expected weather + 2 personal forecasts, got {len(messages)}"
+          required_sections = (
+              "❤️ Отношения",
+              "💼 Работа",
+              "💰 Финансы",
+              "⚡ Энергия и настроение",
+              "🌤 <b>Общий итог дня:</b>",
+              "<b>По четырём направлениям:</b>",
+              "<b>Главный ориентир:</b>",
+          )
+          for person, message in zip(("Дарья", "Владимир"), messages[1:]):
+              missing = [section for section in required_sections if section not in message]
+              if missing:
+                  raise SystemExit(f"{person}: missing forecast sections: {missing}")
+              print(f"{person}: all four topics and daily summary are present.")
+
+          if not result["fact_message"].strip():
+              raise SystemExit("Fact of the day is empty.")
+          if not result["meme_caption"].strip():
+              raise SystemExit("Meme caption is empty.")
+          print("Content structure checks passed; no Telegram publishing or image generation was performed.")
           PY
