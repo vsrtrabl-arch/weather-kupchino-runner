@@ -1,0 +1,69 @@
+name: Daily digest dry run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    name: Validate daily digest without publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout runner repository
+        uses: actions/checkout@v4
+
+      - name: Checkout private source repository
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Compile daily digest modules
+        working-directory: source
+        run: |
+          python -m py_compile daily_digest.py astrology.py interpretations.py weather.py fact_publisher.py meme_generator.py telegram_client.py config.py
+
+      - name: Run daily digest in dry-run mode
+        working-directory: source
+        env:
+          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import date
+          from pathlib import Path
+
+          with Path("fact_history.json").open(encoding="utf-8") as file:
+              fact_history = json.load(file)
+          with Path("meme_history.json").open(encoding="utf-8") as file:
+              meme_history = json.load(file)
+
+          fact_dates = set(fact_history.get("reservations", {}))
+          meme_dates = set(meme_history.get("reservations", {}))
+          common_dates = sorted(fact_dates & meme_dates)
+          if not common_dates:
+              raise SystemExit("No date has both a reserved fact and a reserved meme.")
+
+          test_date = date.fromisoformat(common_dates[-1])
+          print(f"Using latest date with both reservations: {test_date}")
+
+          from daily_digest import run_dry_run
+          run_dry_run(test_date)
+          PY
