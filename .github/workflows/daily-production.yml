@@ -1,0 +1,271 @@
+name: Daily Weather and Horoscope (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Разрешить реальную публикацию полного выпуска в Telegram"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: daily-channel-publication
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    name: Run daily digest from private source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: \${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: true
+
+      - name: Set up Python 3.11
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        id: install_dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Verify private source write permission without changing GitHub
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Temporary runner permission check"
+          git push --dry-run origin HEAD:main
+          git reset --hard HEAD^
+          echo "Private source write access is available; dry-run push changed no remote files."
+
+      - name: Validate project modules and content catalogs
+        working-directory: source
+        run: |
+          python -m py_compile astrology.py interpretations.py memes.py reserve_meme.py facts.py reserve_fact.py daily_digest.py weekly_digest.py workplace_publisher.py delivery_ledger.py quiz_bank.py reserve_quiz.py quiz_telegram.py quiz_publisher.py
+          python workplace_publisher.py --validate-all
+          python - <<'PY'
+          from memes import MEMES
+          from facts import FACTS
+          from quiz_bank import load_questions
+
+          assert len(MEMES) == 365, f"Expected 365 memes, got {len(MEMES)}"
+          assert len({item["id"] for item in MEMES}) == 365, "Duplicate meme IDs"
+          assert len({item["image_text"] for item in MEMES}) == 365, "Duplicate meme texts"
+          assert len({item["caption"] for item in MEMES}) == 85, "Unexpected meme scene/caption catalog"
+          assert len(FACTS) >= 365, f"Expected at least 365 facts, got {len(FACTS)}"
+          assert len({item["id"] for item in FACTS}) == len(FACTS), "Duplicate fact IDs"
+          assert all(item.get("title") and item.get("text") and item.get("source") for item in FACTS)
+          questions = load_questions()
+          assert len(questions) >= 365, f"Expected at least 365 quiz questions, got {len(questions)}"
+          assert len({item["id"] for item in questions}) == len(questions), "Duplicate quiz IDs"
+          print(f"Validated {len(MEMES)} memes, {len(FACTS)} facts and {len(questions)} quiz questions.")
+          PY
+
+      - name: Prevent duplicate daily publication
+        id: duplicate_guard
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const publishRequested =
+              context.eventName === "schedule" ||
+              context.payload.inputs?.publish === "true";
+
+            if (!publishRequested) {
+              core.info("Safe dry-run requested; no Telegram publication will be attempted.");
+              core.setOutput("proceed", "true");
+              return;
+            }
+
+            const timezone = "Europe/Moscow";
+            const dateInMoscow = (value) => new Intl.DateTimeFormat("en-CA", {
+              timeZone: timezone,
+              year: "numeric", month: "2-digit", day: "2-digit",
+            }).format(value);
+            const today = dateInMoscow(new Date());
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "daily-production.yml",
+              per_page: 100,
+            });
+            const earlierRuns = response.data.workflow_runs.filter((run) =>
+              Number(run.id) !== Number(context.runId) &&
+              dateInMoscow(new Date(run.created_at)) === today &&
+              Number(run.id) < Number(context.runId)
+            );
+            const earlierJobs = await Promise.all(earlierRuns.map(async (run) => {
+              const jobs = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              return jobs.data.jobs;
+            }));
+            const digestAlreadyPublished = earlierJobs.some((jobs) =>
+              jobs.some((job) =>
+                job.steps?.some((step) =>
+                  step.name === "Publish daily digest" && step.conclusion === "success"
+                )
+              )
+            );
+            const activeRun = earlierRuns.some((run) => run.status === "in_progress");
+
+            if (digestAlreadyPublished) {
+              core.warning("A daily digest was already sent successfully today. Publication is blocked to prevent duplicates.");
+              core.setOutput("proceed", "false");
+            } else if (activeRun) {
+              core.warning("Another daily publication is still running. This run is blocked.");
+              core.setOutput("proceed", "false");
+            } else {
+              core.info("No earlier successful or active daily publication exists today.");
+              core.setOutput("proceed", "true");
+            }
+
+      - name: Check production secrets are configured
+        if: \${{ (github.event_name == 'schedule' || inputs.publish == true) && steps.duplicate_guard.outputs.proceed == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEATHERAPI_KEY: \${{ secrets.WEATHERAPI_KEY }}
+          QUIZ_WORKER_URL: \${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: \${{ secrets.QUIZ_SYNC_SECRET }}
+        run: |
+          python - <<'PY'
+          import os
+          required = (
+              "TELEGRAM_BOT_TOKEN",
+              "CLOUDFLARE_API_TOKEN",
+              "CLOUDFLARE_ACCOUNT_ID",
+              "WEATHERAPI_KEY",
+              "QUIZ_WORKER_URL",
+              "QUIZ_SYNC_SECRET",
+          )
+          missing = [name for name in required if not os.environ.get(name, "").strip()]
+          if missing:
+              raise SystemExit("Missing required Actions secrets: " + ", ".join(missing))
+          print("All required production secrets are configured.")
+          PY
+
+      - name: Reserve today's meme and fact
+        if: \${{ steps.duplicate_guard.outputs.proceed == 'true' }}
+        working-directory: source
+        run: |
+          python reserve_meme.py
+          python reserve_fact.py
+
+      - name: Persist daily content reservations before publication
+        if: \${{ (github.event_name == 'schedule' || inputs.publish == true) && steps.duplicate_guard.outputs.proceed == 'true' }}
+        working-directory: source
+        run: |
+          git add meme_history.json fact_history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Reserve daily meme and fact"
+            git push origin HEAD:main
+          else
+            echo "Daily content reservations already exist; histories unchanged."
+          fi
+
+      - name: Run daily digest in safe dry-run mode
+        if: \${{ inputs.publish != true && github.event_name != 'schedule' && steps.duplicate_guard.outputs.proceed == 'true' }}
+        working-directory: source
+        env:
+          WEATHERAPI_KEY: \${{ secrets.WEATHERAPI_KEY }}
+        run: python daily_digest.py --dry-run
+
+      - name: Publish daily digest
+        id: daily_digest
+        if: \${{ (github.event_name == 'schedule' || inputs.publish == true) && steps.duplicate_guard.outputs.proceed == 'true' }}
+        working-directory: source
+        env:
+          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEATHERAPI_KEY: \${{ secrets.WEATHERAPI_KEY }}
+        run: python daily_digest.py
+
+      - name: Queue daily workplace dialogue for 12:00 Moscow time
+        if: \${{ steps.daily_digest.conclusion == 'success' }}
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_URL: "https://weather-kupchino-recovery.vsrtrabl.workers.dev/enqueue"
+          WORKPLACE_QUEUE_SECRET: \${{ secrets.WORKPLACE_QUEUE_SECRET }}
+        run: |
+          if [ -z "$WORKPLACE_QUEUE_SECRET" ]; then
+            echo "::warning::WORKPLACE_QUEUE_SECRET is not configured; skipping the optional workplace queue."
+            exit 0
+          fi
+          python -c "from workplace_publisher import enqueue_daily_dialogue; print(enqueue_daily_dialogue())"
+
+      - name: Prepare and queue daily fun-day post for 10:00 Moscow time
+        if: \${{ steps.daily_digest.conclusion == 'success' }}
+        continue-on-error: true
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_SECRET: \${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$WORKPLACE_QUEUE_SECRET" ]; then
+            echo "::warning::WORKPLACE_QUEUE_SECRET is not configured; skipping the optional fun-day queue."
+            exit 0
+          fi
+          python -m py_compile fun_day_calendar.py fun_day_preparer.py fun_day_publisher.py
+          python fun_day_preparer.py
+          git add fun_day_history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Reserve daily fun-day event"
+            git push origin HEAD:main
+          else
+            echo "Fun-day history already persisted."
+          fi
+
+      - name: Publish daily English quiz (idempotent fallback)
+        if: \${{ always() && (github.event_name == 'schedule' || inputs.publish == true) && steps.duplicate_guard.outputs.proceed == 'true' && steps.setup_python.conclusion == 'success' && steps.install_dependencies.conclusion == 'success' }}
+        working-directory: source
+        env:
+          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          QUIZ_CHAT_ID: "@WeatherKupchino"
+          QUIZ_WORKER_URL: \${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: \${{ secrets.QUIZ_SYNC_SECRET }}
+          QUIZ_REPUBLISH: "false"
+        run: |
+          python -m py_compile quiz_bank.py reserve_quiz.py quiz_telegram.py delivery_ledger.py quiz_publisher.py
+          python -c "from quiz_publisher import publish_daily_quiz; print(publish_daily_quiz())"
+
+      - name: Persist daily quiz question reservation
+        if: \${{ always() && (github.event_name == 'schedule' || inputs.publish == true) && steps.duplicate_guard.outputs.proceed == 'true' && steps.setup_python.conclusion == 'success' && steps.install_dependencies.conclusion == 'success' }}
+        working-directory: source
+        run: |
+          git add quiz_history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Reserve daily English quiz question"
+            git push origin HEAD:main
+          else
+            echo "No quiz history changes to persist."
+          fi
