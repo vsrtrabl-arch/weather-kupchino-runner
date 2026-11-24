@@ -1,0 +1,59 @@
+name: WeatherAPI fallback check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-weather-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify WeatherAPI fallback
+        working-directory: source
+        env:
+          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          import weather
+
+          if not os.environ.get("WEATHERAPI_KEY", "").strip():
+              raise SystemExit("WEATHERAPI_KEY secret is missing or empty in runner repository.")
+
+          real_get_json = weather.get_json
+
+          def force_open_meteo_failure(url):
+              if "api.open-meteo.com" in url:
+                  raise RuntimeError("Forced primary-source failure for fallback test")
+              if "api.weatherapi.com" in url:
+                  return real_get_json(url)
+              raise RuntimeError("Unexpected weather API host during fallback test")
+
+          weather.get_json = force_open_meteo_failure
+          report = weather.get_weather()
+
+          if not report or "WeatherAPI.com" not in report:
+              raise SystemExit("Fallback test failed: report does not identify WeatherAPI.com.")
+
+          print("PASS: Open-Meteo failure was simulated.")
+          print("PASS: WeatherAPI returned a valid weather report.")
+          print("PASS: The report identifies WeatherAPI.com as its source.")
+          print("PASS: No Telegram API or image generation was called.")
+          PY
