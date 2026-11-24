@@ -40,6 +40,10 @@ jobs:
         run: |
           python -m py_compile daily_digest.py astrology.py interpretations.py weather.py fact_publisher.py meme_generator.py telegram_client.py config.py
 
+      - name: Run horoscope interpretation unit tests
+        working-directory: source
+        run: python -m unittest tests.test_refactor_config_and_interpretations -v
+
       - name: Run daily digest in dry-run mode
         working-directory: source
         env:
