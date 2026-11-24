@@ -1,0 +1,32 @@
+name: Private source access check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-check:
+    name: Verify read-only access to private source
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout private source repository
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Verify required project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f source/requirements.txt
+          test -f source/daily_digest.py
+          test -f source/astrology.py
+          echo "Private source checkout succeeded."
+          echo "Required project files are present."
