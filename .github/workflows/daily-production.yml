@@ -229,7 +229,7 @@ jobs:
           python -c "from workplace_publisher import enqueue_daily_dialogue; print(enqueue_daily_dialogue())"
 
       - name: Prepare and queue daily fun-day post for 10:00 Moscow time
-        if: ${{ steps.daily_digest.conclusion == 'success' }}
+        if: ${{ always() && steps.daily_digest.conclusion == 'success' }}
         continue-on-error: true
         working-directory: source
         env:
