@@ -1,0 +1,75 @@
+name: Prepare Fun Day Post (manual recovery)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Дата публикации YYYY-MM-DD (пусто — текущая дата Москвы)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-channel-publication
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Generate and queue one calendar post (no Telegram send)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Generate image and enqueue calendar post
+        working-directory: source
+        env:
+          TARGET_DATE: ${{ inputs.target_date }}
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WORKPLACE_QUEUE_SECRET" ]; then
+            echo "::error::WORKPLACE_QUEUE_SECRET is not configured."
+            exit 1
+          fi
+          python -m py_compile fun_day_calendar.py fun_day_preparer.py fun_day_publisher.py
+          if [ -n "$TARGET_DATE" ]; then
+            python fun_day_preparer.py --date "$TARGET_DATE"
+          else
+            python fun_day_preparer.py
+          fi
+
+      - name: Persist event reservation
+        working-directory: source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fun_day_history.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Reserve manually recovered fun-day event"
+            git push origin HEAD:main
+          else
+            echo "No event reservation changes to persist."
+          fi
