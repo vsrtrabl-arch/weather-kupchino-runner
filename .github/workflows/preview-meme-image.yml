@@ -142,3 +142,5 @@ jobs:
           retention-days: 7
 
 # Trigger isolated preview for the balanced photorealistic meme style palette.
+
+# Re-run isolated preview with photo-first weighted style selection.
