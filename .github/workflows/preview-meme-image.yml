@@ -13,6 +13,11 @@ on:
         description: "Moscow date to preview (YYYY-MM-DD; blank means today)"
         required: false
         type: string
+      run_image_preview:
+        description: "Generate a real image preview (uses image generation credits)"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -86,6 +91,7 @@ jobs:
           PY
 
       - name: Generate one real meme image preview (no Telegram delivery)
+        if: inputs.run_image_preview == true
         working-directory: source
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
