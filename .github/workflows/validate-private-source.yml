@@ -1,12 +1,16 @@
 name: Validate Private Source Tests (public runner)
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/daily-production.yml"
+      - ".github/workflows/validate-private-source.yml"
   workflow_dispatch:
     inputs:
       source_ref:
         description: "Ветка, тег или commit закрытого репозитория (по умолчанию main)"
         required: false
-        default: "main"
+        default: "feature/planet-fact-1300-minimal"
         type: string
 
 permissions:
@@ -18,15 +22,15 @@ concurrency:
 
 jobs:
   test:
-    name: Run Fun Day tests from private source
+    name: Validate private project source
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout private project source
         uses: actions/checkout@v4
         with:
           repository: vsrtrabl-arch/weather-kupchino-daily
-          ref: ${{ inputs.source_ref || 'main' }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.source_ref || 'main') || github.head_ref }}
           token: ${{ secrets.SOURCE_REPO_TOKEN }}
           path: source
           persist-credentials: false
@@ -42,27 +46,29 @@ jobs:
         working-directory: source
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
-      - name: Compile Fun Day modules
+      - name: Compile production and Planet fact modules
         working-directory: source
         run: |
           python -m py_compile \
-            fun_day_calendar.py \
-            fun_day_official_calendar.py \
-            fun_day_preparer.py \
-            fun_day_publisher.py
+            daily_digest.py \
+            fact_preparer.py \
+            fact_publisher.py \
+            fact_queue_publisher.py \
+            reserve_fact.py
+          node --check cloudflare-recovery/worker.js
 
-      - name: Run Fun Day unit tests
+      - name: Run all source unit tests
         working-directory: source
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -p "test_fun_day_*.py" -v 2>&1 | tee ../fun-day-test-results.log
+          python -m unittest discover -s tests -v 2>&1 | tee ../source-test-results.log
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fun-day-test-results-${{ github.run_id }}
-          path: fun-day-test-results.log
+          name: private-source-test-results-${{ github.run_id }}
+          path: source-test-results.log
           if-no-files-found: warn
           retention-days: 14
