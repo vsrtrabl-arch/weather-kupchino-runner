@@ -229,6 +229,7 @@ jobs:
             exit 0
           fi
           python -m py_compile fact_preparer.py fact_publisher.py
+          python fact_preparer.py --dry-run
           python fact_preparer.py
 
       - name: Queue daily workplace dialogue for 12:00 Moscow time
