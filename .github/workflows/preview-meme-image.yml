@@ -1,0 +1,131 @@
+name: Preview Daily Meme Image (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Moscow date to preview (YYYY-MM-DD; blank means today)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meme-image-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Test private meme source and generate preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout public runner
+        uses: actions/checkout@v4
+
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Compile meme modules
+        working-directory: source
+        run: python -m py_compile memes.py reserve_meme.py meme_generator.py
+
+      - name: Test meme prompt construction without external calls
+        working-directory: source
+        run: python -m unittest discover -s tests -p "test_meme_image_prompt.py" -v
+
+      - name: Validate meme library structure
+        working-directory: source
+        run: |
+          python - <<'PY'
+          from memes import MEMES
+          from reserve_meme import MEME_CATEGORIES
+
+          assert len(MEMES) == 85, f"Expected 85 scenes, got {len(MEMES)}"
+          ids = [item["id"] for item in MEMES]
+          assert len(ids) == len(set(ids)), "Duplicate meme scene IDs"
+          assert all(item.get("image_text") and item.get("caption") for item in MEMES)
+          assert all(item.get("visual_direction") and item.get("search") for item in MEMES)
+          print(f"Validated {len(MEMES)} meme scenes and their required fields.")
+          PY
+
+      - name: Generate one real meme image preview (no Telegram delivery)
+        working-directory: source
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import date, datetime
+          from zoneinfo import ZoneInfo
+          from memes import MEMES
+          from reserve_meme import reserve_for_date
+          from meme_generator import build_meme_image_prompt, create_meme
+
+          raw_date = os.environ.get("TARGET_DATE", "").strip()
+          target = (
+              date.fromisoformat(raw_date)
+              if raw_date
+              else datetime.now(ZoneInfo("Europe/Moscow")).date()
+          )
+          date_key = target.isoformat()
+          meme_id = reserve_for_date(date_key)
+          meme = next(item for item in MEMES if item["id"] == meme_id)
+          prompt = build_meme_image_prompt(meme, target)
+
+          with open("meme_preview_prompt.txt", "w", encoding="utf-8") as file:
+              file.write(prompt)
+          with open("meme_preview_metadata.json", "w", encoding="utf-8") as file:
+              json.dump({
+                  "date": date_key,
+                  "meme_id": meme_id,
+                  "category": meme["category"],
+                  "title": meme["title"],
+                  "format": meme["format_name"],
+                  "image_text": meme["image_text"],
+                  "caption": meme["caption"],
+                  "prompt_length": len(prompt),
+                  "telegram_delivery": False
+              }, file, ensure_ascii=False, indent=2)
+
+          caption = create_meme(target, generate_image=True)
+          assert os.path.isfile("daily_meme.png"), "Preview image was not created"
+          assert os.path.getsize("daily_meme.png") > 10_000, "Preview image is unexpectedly small"
+          assert caption == meme["caption"][:990], "Generated caption differs from reserved meme"
+          print(f"Created preview for {date_key}: {meme_id}")
+          print("Telegram delivery: disabled.")
+          PY
+
+      - name: Upload preview image and prompt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meme-image-preview-${{ github.run_id }}
+          path: |
+            source/daily_meme.png
+            source/daily_source.jpg
+            source/meme_preview_prompt.txt
+            source/meme_preview_metadata.json
+          if-no-files-found: warn
+          retention-days: 7
