@@ -215,6 +215,22 @@ jobs:
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
         run: python daily_digest.py
 
+      - name: Prepare and queue Planet fact for 13:00 Moscow time
+        if: ${{ steps.daily_digest.conclusion == 'success' }}
+        continue-on-error: true
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$WORKPLACE_QUEUE_SECRET" ]; then
+            echo "::warning::WORKPLACE_QUEUE_SECRET is not configured; skipping the optional 13:00 Planet fact post."
+            exit 0
+          fi
+          python -m py_compile fact_preparer.py fact_publisher.py
+          python fact_preparer.py
+
       - name: Queue daily workplace dialogue for 12:00 Moscow time
         if: ${{ steps.daily_digest.conclusion == 'success' }}
         working-directory: source
