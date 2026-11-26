@@ -1,6 +1,6 @@
 name: Validate Private Source Tests (public runner)
 
-# The PR validates the same-named private source branch without running production publishing jobs.
+# The PR validates the same-named private source branch without running production publishing jobs. Keep this workflow_dispatch entry for isolated manual rechecks.
 
 on:
   workflow_dispatch:
