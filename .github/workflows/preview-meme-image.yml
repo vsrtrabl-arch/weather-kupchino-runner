@@ -1,3 +1,4 @@
+# Re-run preview after repairing the source prompt builder.
 # Manual preview runs on the public runner; source code is checked out separately.
 name: Preview Daily Meme Image (public runner)
 
