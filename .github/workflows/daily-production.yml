@@ -2,7 +2,7 @@ name: Daily Weather and Horoscope (public runner)
 
 on:
   schedule:
-    # 07:05 Europe/Moscow (UTC+3)
+    # 07:05 Europe/Moscow (UTC+3); pull-request validation is isolated from production publishing.
     - cron: "5 4 * * *"
   pull_request:
     paths:
