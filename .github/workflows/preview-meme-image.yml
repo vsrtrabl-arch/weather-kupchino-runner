@@ -140,3 +140,5 @@ jobs:
             source/meme_preview_metadata.json
           if-no-files-found: warn
           retention-days: 7
+
+# Trigger isolated preview for the balanced photorealistic meme style palette.
