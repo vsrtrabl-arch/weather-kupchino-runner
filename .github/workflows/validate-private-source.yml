@@ -3,10 +3,6 @@ name: Validate Private Source Tests (public runner)
 # The PR validates the same-named private source branch without running production publishing jobs.
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/daily-production.yml"
-      - ".github/workflows/validate-private-source.yml"
   workflow_dispatch:
     inputs:
       source_ref:
