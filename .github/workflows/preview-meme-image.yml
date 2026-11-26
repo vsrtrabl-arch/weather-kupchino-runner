@@ -59,9 +59,16 @@ jobs:
         working-directory: source
         run: python -m py_compile memes.py reserve_meme.py meme_generator.py
 
-      - name: Test meme prompt construction without external calls
+      - name: Test Telegram rubric hashtags and publication formatting
         working-directory: source
-        run: python -m unittest discover -s tests -p "test_meme_image_prompt.py" -v
+        run: |
+          python -m unittest \
+            tests/test_daily_digest.py \
+            tests/test_weekly_digest.py \
+            tests/test_workplace_publisher.py \
+            tests/test_fun_day_calendar.py \
+            tests/test_quiz_telegram.py \
+            tests/test_meme_image_prompt.py -v
 
       - name: Validate meme library structure
         working-directory: source
