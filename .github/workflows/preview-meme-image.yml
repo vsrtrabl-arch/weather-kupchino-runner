@@ -56,15 +56,15 @@ jobs:
         working-directory: source
         run: |
           python - <<'PY'
-          from memes import MEMES
-          from reserve_meme import MEME_CATEGORIES
+          from memes import MEMES, MEME_SCENES
 
-          assert len(MEMES) == 85, f"Expected 85 scenes, got {len(MEMES)}"
+          assert len(MEME_SCENES) == 85, f"Expected 85 scenes, got {len(MEME_SCENES)}"
+          assert len(MEMES) == 365, f"Expected 365 meme variants, got {len(MEMES)}"
           ids = [item["id"] for item in MEMES]
-          assert len(ids) == len(set(ids)), "Duplicate meme scene IDs"
+          assert len(ids) == len(set(ids)), "Duplicate meme variant IDs"
           assert all(item.get("image_text") and item.get("caption") for item in MEMES)
           assert all(item.get("visual_direction") and item.get("search") for item in MEMES)
-          print(f"Validated {len(MEMES)} meme scenes and their required fields.")
+          print(f"Validated {len(MEME_SCENES)} scenes, {len(MEMES)} meme variants and their required fields.")
           PY
 
       - name: Generate one real meme image preview (no Telegram delivery)
