@@ -1,0 +1,112 @@
+name: Publish Planet Fact (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: "Разрешить отправку одного факта в Telegram"
+        required: true
+        default: false
+        type: boolean
+      target_date:
+        description: "Дата выпуска YYYY-MM-DD (пусто — текущая дата Москвы)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-channel-publication
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate queued Planet fact (no Telegram send)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Validate queued fact image and caption (no Telegram send)
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          python -m py_compile fact_queue_publisher.py delivery_ledger.py quiz_telegram.py
+          if [ -n "$TARGET_DATE" ]; then
+            python fact_queue_publisher.py --dry-run --date "$TARGET_DATE"
+          else
+            python fact_queue_publisher.py --dry-run
+          fi
+
+      - name: Check D1 delivery ledger readiness
+        working-directory: source
+        env:
+          QUIZ_WORKER_URL: ${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: ${{ secrets.QUIZ_SYNC_SECRET }}
+        run: |
+          python - <<'PY'
+          from delivery_ledger import DeliveryLedger
+          DeliveryLedger().preflight("@WeatherKupchino")
+          print("Preflight passed: D1 delivery ledger is ready.")
+          PY
+
+  publish:
+    name: Publish one confirmed Planet fact
+    needs: preflight
+    if: ${{ inputs.confirm_publish == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Publish queued Planet fact once
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          QUIZ_WORKER_URL: ${{ secrets.QUIZ_WORKER_URL }}
+          QUIZ_SYNC_SECRET: ${{ secrets.QUIZ_SYNC_SECRET }}
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python fact_queue_publisher.py --publish --date "$TARGET_DATE"
+          else
+            python fact_queue_publisher.py --publish
+          fi
