@@ -8,7 +8,7 @@ on:
       source_ref:
         description: "Ветка, тег или commit закрытого репозитория (по умолчанию main)"
         required: false
-        default: "main"
+        default: "fix/worker-rubric-isolation-20261127"
         type: string
 
 permissions:
@@ -54,6 +54,8 @@ jobs:
             fact_queue_publisher.py \
             reserve_fact.py
           node --check cloudflare-recovery/worker.js
+          echo "Testing private source ref: $(git -C . rev-parse --short HEAD)"
+          test -f tests/test_worker_schedule.mjs
           node --test tests/test_worker_schedule.mjs
 
       - name: Run all source unit tests
