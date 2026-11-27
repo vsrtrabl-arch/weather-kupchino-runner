@@ -1,0 +1,92 @@
+name: Prepare Planet Fact Queue (public runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Дата факта YYYY-MM-DD (пусто — сегодняшняя дата Москвы)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: planet-fact-preparation
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Generate image and enqueue one Planet fact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout private project source
+        uses: actions/checkout@v4
+        with:
+          repository: vsrtrabl-arch/weather-kupchino-daily
+          ref: main
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: source/requirements.txt
+
+      - name: Install project dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Check required preparation secrets
+        env:
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          required = ("WORKPLACE_QUEUE_SECRET", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID")
+          missing = [name for name in required if not os.environ.get(name, "").strip()]
+          if missing:
+              raise SystemExit("Missing required Actions secrets: " + ", ".join(missing))
+          print("Preparation secrets are configured.")
+          PY
+
+      - name: Validate reserved fact and caption without external calls
+        working-directory: source
+        env:
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          python -m py_compile fact_preparer.py fact_publisher.py
+          if [ -n "$TARGET_DATE" ]; then
+            python fact_preparer.py --dry-run --date "$TARGET_DATE"
+          else
+            python fact_preparer.py --dry-run
+          fi
+
+      - name: Generate themed image and enqueue today's fact
+        working-directory: source
+        env:
+          WORKPLACE_QUEUE_SECRET: ${{ secrets.WORKPLACE_QUEUE_SECRET }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          if [ -n "$TARGET_DATE" ]; then
+            python fact_preparer.py --date "$TARGET_DATE"
+          else
+            python fact_preparer.py
+          fi
+
+      - name: Save generated image for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-fact-image-${{ github.run_id }}
+          path: source/daily_fact.png
+          if-no-files-found: warn
+          retention-days: 7
