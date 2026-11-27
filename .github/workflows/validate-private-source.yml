@@ -54,6 +54,7 @@ jobs:
             fact_queue_publisher.py \
             reserve_fact.py
           node --check cloudflare-recovery/worker.js
+          node --test tests/test_worker_schedule.mjs
 
       - name: Run all source unit tests
         working-directory: source
